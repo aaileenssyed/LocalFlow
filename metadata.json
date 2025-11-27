@@ -1,0 +1,7 @@
+{
+  "name": "LocalFlow",
+  "description": "A dynamic, vibe-based travel itinerary app that adapts in real-time to your location and schedule using Gemini 2.5.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
