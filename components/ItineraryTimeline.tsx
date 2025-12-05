@@ -1,20 +1,19 @@
 import React from 'react';
 import { Itinerary } from '../types';
-import { MapPin, Camera, Star, AlertCircle, Lock, Navigation2, Footprints, Train, Car, Wallet, Clock } from 'lucide-react';
+import { MapPin, Camera, Star, AlertCircle, Lock, Navigation2, Footprints, Train, Car, Wallet, Clock, Users, Lightbulb, RefreshCcw } from 'lucide-react';
 
 interface Props {
   itinerary: Itinerary;
   currentTime: string;
+  onSwap?: (stopId: string, stopName: string) => void;
 }
 
-export const ItineraryTimeline: React.FC<Props> = ({ itinerary, currentTime }) => {
+export const ItineraryTimeline: React.FC<Props> = ({ itinerary, currentTime, onSwap }) => {
   
   const getMapsLink = (stop: any, prevStop: any) => {
-    // If it's the first stop, just search the location
     if (!prevStop) {
       return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.location.address)}`;
     }
-    // Otherwise calculate directions
     return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(prevStop.location.address)}&destination=${encodeURIComponent(stop.location.address)}&travelmode=transit`;
   };
 
@@ -23,6 +22,16 @@ export const ItineraryTimeline: React.FC<Props> = ({ itinerary, currentTime }) =
     if (m.includes('walk')) return <Footprints size={12} />;
     if (m.includes('taxi') || m.includes('car')) return <Car size={12} />;
     return <Train size={12} />;
+  };
+
+  const getCrowdColor = (level?: string) => {
+      switch(level) {
+          case 'Low': return 'text-emerald-400';
+          case 'Moderate': return 'text-yellow-400';
+          case 'Busy': return 'text-orange-400';
+          case 'Crushed': return 'text-red-500';
+          default: return 'text-zinc-500';
+      }
   };
 
   return (
@@ -35,7 +44,7 @@ export const ItineraryTimeline: React.FC<Props> = ({ itinerary, currentTime }) =
         return (
           <div key={stop.id} className={`relative group ${isPast ? 'opacity-50 grayscale' : 'opacity-100'}`}>
             
-            {/* Connector Line Logic for Travel Info */}
+            {/* Travel Info */}
             {prevStop && prevStop.travelToNext && (
               <div className="absolute -left-[32px] -top-12 h-12 flex flex-col items-end justify-center w-24 pointer-events-none">
                  <div className="bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 text-[10px] text-zinc-500 flex items-center gap-1.5 shadow-sm">
@@ -54,7 +63,7 @@ export const ItineraryTimeline: React.FC<Props> = ({ itinerary, currentTime }) =
             `} />
 
             {/* Time & Cost Header */}
-            <div className="flex items-center gap-3 mb-1">
+            <div className="flex items-center gap-4 mb-1">
               <span className="text-xs font-mono text-zinc-500 flex items-center gap-1">
                  <Clock size={10} />
                  {stop.startTime} - {stop.endTime || '?'}
@@ -62,85 +71,93 @@ export const ItineraryTimeline: React.FC<Props> = ({ itinerary, currentTime }) =
               <span className="text-xs font-mono text-zinc-600 flex items-center gap-1">
                  <Wallet size={10} /> {stop.estimatedCost}
               </span>
+              {stop.crowdLevel && (
+                  <span className={`text-xs font-mono flex items-center gap-1 ${getCrowdColor(stop.crowdLevel)}`}>
+                      <Users size={10} /> {stop.crowdLevel}
+                  </span>
+              )}
             </div>
 
             {/* Card */}
             <div className={`
-              rounded-xl p-5 border transition-all duration-300 relative overflow-hidden
+              rounded-xl p-5 border transition-all duration-300 relative overflow-hidden group/card
               ${stop.isFixed 
                 ? 'bg-amber-950/10 border-amber-500/30' 
                 : isNext 
                   ? 'bg-gradient-to-br from-zinc-800 to-zinc-900 border-indigo-500/30 shadow-lg' 
                   : 'bg-zinc-900/40 border-zinc-800 hover:border-zinc-700'}
             `}>
-              {/* Fixed Stop Indicator */}
-              {stop.isFixed && (
-                <div className="absolute top-0 right-0 p-2 bg-amber-500/10 rounded-bl-xl text-amber-500">
-                   <Lock size={14} />
-                </div>
-              )}
+              {/* Actions */}
+              <div className="absolute top-3 right-3 flex gap-2">
+                 {!stop.isFixed && onSwap && (
+                     <button 
+                        onClick={() => onSwap(stop.id, stop.name)}
+                        className="p-1.5 text-zinc-600 hover:text-indigo-400 hover:bg-indigo-500/10 rounded transition-colors opacity-0 group-hover/card:opacity-100"
+                        title="Swap for alternative"
+                     >
+                         <RefreshCcw size={14} />
+                     </button>
+                 )}
+                 {stop.isFixed && (
+                    <div className="p-1.5 bg-amber-500/10 rounded text-amber-500">
+                        <Lock size={14} />
+                    </div>
+                 )}
+              </div>
 
-              <div className="flex justify-between items-start mb-2 pr-8">
+              <div className="flex justify-between items-start mb-2 pr-12">
                 <h3 className="font-bold text-lg text-zinc-100 leading-tight">{stop.name}</h3>
-                {!stop.isFixed && (
-                  <div className="flex items-center gap-2">
-                     {stop.instagramScore > 7 && (
-                       <div className="bg-pink-500/20 text-pink-400 p-1 rounded-md" title={`Insta Score: ${stop.instagramScore}`}>
-                         <Camera size={14} />
-                       </div>
-                     )}
-                     {stop.authenticityScore > 7 && (
-                       <div className="bg-emerald-500/20 text-emerald-400 p-1 rounded-md" title={`Auth Score: ${stop.authenticityScore}`}>
-                         <Star size={14} />
-                       </div>
-                     )}
-                  </div>
-                )}
               </div>
               
               <p className="text-sm text-zinc-400 mb-3">{stop.description}</p>
               
-              {/* Vibe Tags */}
+              {/* Tips Section */}
+              <div className="space-y-2 mb-4">
+                  {stop.localTip && (
+                      <div className="text-xs flex gap-2 items-start text-emerald-200/80 bg-emerald-900/10 p-2 rounded border border-emerald-900/20">
+                          <Lightbulb size={14} className="mt-0.5 shrink-0" />
+                          <span><strong className="text-emerald-400">Local Tip:</strong> {stop.localTip}</span>
+                      </div>
+                  )}
+                  {stop.bestPhotoSpot && (
+                      <div className="text-xs flex gap-2 items-start text-indigo-200/80 bg-indigo-900/10 p-2 rounded border border-indigo-900/20">
+                          <Camera size={14} className="mt-0.5 shrink-0" />
+                          <span><strong className="text-indigo-400">Photo Op:</strong> {stop.bestPhotoSpot}</span>
+                      </div>
+                  )}
+              </div>
+
+              {/* Tags */}
               <div className="flex flex-wrap gap-2 mb-3">
                 {stop.tags.map(tag => (
                   <span key={tag} className="text-[10px] uppercase tracking-wider px-2 py-1 bg-zinc-950 rounded border border-zinc-800 text-zinc-500">
                     {tag}
                   </span>
                 ))}
+                {!stop.isFixed && (
+                    <div className="flex items-center gap-1 ml-auto">
+                        {stop.instagramScore > 7 && <Star size={10} className="text-pink-500" />}
+                        {stop.authenticityScore > 7 && <Star size={10} className="text-emerald-500" />}
+                    </div>
+                )}
               </div>
-
-              {/* Photo Spot Tip */}
-              {stop.bestPhotoSpot && (
-                  <div className="mb-3 p-2 rounded bg-zinc-950/50 border border-zinc-800 flex gap-2 items-start">
-                      <Camera size={14} className="text-indigo-400 mt-0.5 shrink-0" />
-                      <p className="text-xs text-zinc-400"><span className="text-indigo-400 font-medium">Photo Op:</span> {stop.bestPhotoSpot}</p>
-                  </div>
-              )}
-
-              {/* Safety/Dietary Note */}
-              {stop.dietaryNotes && (
-                <div className="flex items-start gap-2 mt-4 p-3 bg-red-900/10 border border-red-900/30 rounded-lg text-xs text-red-200/80">
-                  <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                  <p>{stop.dietaryNotes}</p>
-                </div>
-              )}
               
               <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
-                <div className="flex items-center gap-1 text-xs text-zinc-500">
+                <div className="flex items-center gap-1 text-xs text-zinc-500 truncate max-w-[200px]">
                   <MapPin size={12} /> {stop.location.address}
                 </div>
                 <a 
                   href={getMapsLink(stop, prevStop)} 
                   target="_blank" 
                   rel="noreferrer"
-                  className="flex items-center gap-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors bg-indigo-500/10 px-3 py-1.5 rounded-full"
+                  className="flex items-center gap-1.5 text-xs font-medium text-zinc-300 hover:text-white transition-colors bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 rounded-full border border-zinc-700"
                 >
-                  <Navigation2 size={12} /> Navigate
+                  <Navigation2 size={12} /> Directions
                 </a>
               </div>
             </div>
             
-            {/* Connector Line (HTML/CSS hack for continuous line) */}
+            {/* Connector Line */}
             {index !== itinerary.stops.length - 1 && (
                <div className="absolute left-[20px] top-5 bottom-0 w-px bg-zinc-800 -z-10" /> 
             )}

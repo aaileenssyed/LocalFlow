@@ -1,13 +1,24 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { UserPreferences, Itinerary } from '../types';
+import { UserPreferences, Itinerary, Stop } from '../types';
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Helper to find a location using Google Maps Tool
+// Helper to strip markdown code blocks if present
+const cleanJsonString = (str: string) => {
+  return str.replace(/```json\n?|```/g, '').trim();
+};
+
+// Phase 2: Resolve specific location details using Google Maps Tool
+// We cannot use responseMimeType: "application/json" with googleMaps, so we parse manually.
 export const resolveLocation = async (query: string, userLocationHint?: string) => {
-  if (!query) return null;
+  if (!query) return { lat: 0, lng: 0, address: query };
   
-  const prompt = `Find the specific location: "${query}" near "${userLocationHint || ''}". Return the official name and formatted address.`;
+  const prompt = `
+    Find the specific location: "${query}" near "${userLocationHint || ''}". 
+    Return a JSON object with the keys: "lat" (number), "lng" (number), "address" (string), and "name" (official name string).
+    Ensure the coordinates are accurate real-world values from Google Maps.
+    Return ONLY the raw JSON. No Markdown.
+  `;
 
   try {
       const response = await ai.models.generateContent({
@@ -18,25 +29,21 @@ export const resolveLocation = async (query: string, userLocationHint?: string) 
         }
       });
 
-      // Extract grounding metadata if available
-      const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      let address = query;
-      let name = query;
-      let lat = 0;
-      let lng = 0;
+      const text = response.text;
+      if (!text) return { lat: 0, lng: 0, address: query, name: query };
 
-      // Logic to parse the text response or grounding chunks would go here
-      // For this implementation, we will trust the text response to contain the address
-      // or simply return the query if the tool fails. 
-      // In a real implementation with the Maps tool, we'd parse the groundingChunks.maps.uri
-      
-      // Fallback: Just return the text which likely contains the address
-      return {
-          name: name,
-          address: response.text || query,
-          lat: 0, // Maps tool doesn't always return lat/lng directly in text, handled by generation later
-          lng: 0
-      };
+      try {
+          const json = JSON.parse(cleanJsonString(text));
+          return {
+              name: json.name || query,
+              address: json.address || query,
+              lat: json.lat || 0,
+              lng: json.lng || 0
+          };
+      } catch (e) {
+          console.warn("Failed to parse location JSON", text);
+          return { lat: 0, lng: 0, address: text.substring(0, 50), name: query };
+      }
 
   } catch (e) {
       console.error("Location resolve failed", e);
@@ -44,7 +51,7 @@ export const resolveLocation = async (query: string, userLocationHint?: string) 
   }
 };
 
-// Define the Schema for the response to ensure Type Safety
+// Schema for Phase 1 (Planning)
 const stopSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -58,8 +65,11 @@ const stopSchema: Schema = {
     authenticityScore: { type: Type.INTEGER, description: "1-10" },
     instagramScore: { type: Type.INTEGER, description: "1-10" },
     isFixed: { type: Type.BOOLEAN, description: "True if this matches a user commitment" },
-    estimatedCost: { type: Type.STRING, description: "Cost estimate in local currency or USD, e.g. '¥2000' or 'Free'" },
+    estimatedCost: { type: Type.STRING, description: "Cost estimate e.g. '$$', 'Free', '$20'" },
     bestPhotoSpot: { type: Type.STRING, description: "Specific advice on where/what to photograph here" },
+    localTip: { type: Type.STRING, description: "Insider advice regarding rush, best seats, or hidden details" },
+    whyThisSpot: { type: Type.STRING, description: "Conversational reason why this specific spot fits the user's vibe/request." },
+    crowdLevel: { type: Type.STRING, enum: ["Low", "Moderate", "Busy", "Crushed"] },
     travelToNext: {
         type: Type.OBJECT,
         description: "Travel to the NEXT stop in the list.",
@@ -68,6 +78,7 @@ const stopSchema: Schema = {
             duration: { type: Type.STRING, description: "e.g. '15 min'" }
         }
     },
+    // We request structure here, but values will be placeholders until Phase 2
     location: {
       type: Type.OBJECT,
       properties: {
@@ -98,42 +109,69 @@ const itinerarySchema: Schema = {
   required: ["stops", "title", "totalAuthenticityScore", "totalInstagramScore"]
 };
 
+// Enrich the stops with real coordinates
+const enrichItineraryWithLocations = async (itinerary: Itinerary, cityContext: string): Promise<Itinerary> => {
+    const enrichedStops = await Promise.all(itinerary.stops.map(async (stop) => {
+        // If it's a user commitment with coords already, skip
+        if (stop.location && stop.location.lat !== 0) return stop;
+        
+        // Otherwise resolve
+        const loc = await resolveLocation(stop.name, cityContext);
+        return {
+            ...stop,
+            location: {
+                ...stop.location,
+                lat: loc.lat,
+                lng: loc.lng,
+                address: loc.address
+            }
+        };
+    }));
+
+    return {
+        ...itinerary,
+        stops: enrichedStops
+    };
+};
+
 export const generateItinerary = async (
   prefs: UserPreferences, 
   currentLocation: {lat: number, lng: number},
   currentTime: string
 ): Promise<Itinerary> => {
   
+  // Phase 1: Generate the plan structure (JSON Mode, No Tools)
   const prompt = `
-    Create a travel itinerary for: ${prefs.location}.
+    You are a savvy, aesthetic-obsessed LOCAL FRIEND acting as a travel guide for ${prefs.location}.
     Current Time: ${currentTime}.
+    Trip Start Time: ${prefs.tripStartTime}.
+    Trip End Time: ${prefs.tripEndTime}.
     
     USER PREFERENCES:
-    - Vibe Score: ${prefs.vibeScore} (0 = Pure Aesthetic/Tourist, 100 = Deep Local/Authentic).
-    - Vibe Description: "${prefs.vibeDescription}". (Use this to tailor the mood/style of places).
+    - Vibe Score: ${prefs.vibeScore} (0 = High Gloss/Tourist, 100 = Gritty/Local).
+    - Vibe Description: "${prefs.vibeDescription}".
     - Dietary Restrictions: ${prefs.dietary.join(', ') || "None"}.
     - Budget Level: ${prefs.budget}.
     
-    MANDATORY COMMITMENTS (Fixed Stops):
-    The user has the following fixed plans with specific START and END times. 
-    You MUST include these exactly as specified. 
-    Do not double book.
+    FIXED COMMITMENTS (User Must Be Here):
     ${JSON.stringify(prefs.fixedCommitments)}
 
-    ALGORITHM RULES:
-    1. TIMING IS KEY: 
-       - If a place is famous for night views (e.g., Times Square, Night Markets), schedule it in the evening.
-       - If a place is a "Fixed Commitment", adhere strictly to the startTime and endTime provided.
-       - Fill gaps between commitments with vibe-appropriate activities.
-    2. VIBE MATCHING: 
-       - If Vibe Score > 70, discard any location with Authenticity Score < 7, unless it's a fixed commitment.
-       - Use the "Vibe Description" to filter recommendations (e.g. if "Neon", find bright signage; if "Quiet", find parks/libraries).
-    3. LOGISTICS: 
-       - Calculate realistic 'travelToNext' (mode and duration) between stops. 
-       - Ensure there is enough travel time between a chosen activity and a fixed commitment.
-    4. PHOTOS:
-       - Provide a specific 'bestPhotoSpot' tip for every location (e.g. "From the bridge facing west").
-    5. Output JSON only.
+    INSTRUCTIONS:
+    1. **Persona**: Be the friend who knows the hidden rooftop bars in Dumbo, the best time to ride the Roosevelt Tram (sunset), and where to get the best bagel without the line.
+    2. **Timing**: 
+       - Schedule strictly between ${prefs.tripStartTime} and ${prefs.tripEndTime}.
+       - Prioritize "Golden Hour" (sunrise/sunset) for scenic spots.
+       - Avoid "Crushed" crowd levels if possible, or warn the user.
+    3. **Logistics**:
+       - Fill gaps between commitments.
+       - Account for realistic travel times in a busy city.
+       - Leave lat/lng as 0 for now; we will resolve them later.
+    4. **Output**:
+       - Provide a 'localTip' for every stop (e.g. "Sit on the front car", "Ask for the secret menu").
+       - 'whyThisSpot' should explain the connection to the user's vibe description.
+       - 'bestPhotoSpot' is mandatory.
+
+    Return JSON only.
   `;
 
   try {
@@ -143,14 +181,19 @@ export const generateItinerary = async (
       config: {
         responseMimeType: "application/json",
         responseSchema: itinerarySchema,
-        thinkingConfig: { thinkingBudget: 1024 }, 
+        thinkingConfig: { thinkingBudget: 2048 },
+        // NOTE: No googleMaps tool here to allow proper JSON schema generation
       }
     });
 
     const text = response.text;
     if (!text) throw new Error("No response from Gemini");
     
-    return JSON.parse(text) as Itinerary;
+    const initialItinerary = JSON.parse(text) as Itinerary;
+
+    // Phase 2: Grounding (Resolve Locations)
+    return await enrichItineraryWithLocations(initialItinerary, prefs.location);
+
   } catch (error) {
     console.error("Gemini Gen Error:", error);
     throw error;
@@ -170,10 +213,10 @@ export const recalculateItinerary = async (
     Current Time: ${currentTime}.
     Current Plan: ${JSON.stringify(currentItinerary.stops.map(s => s.name))}.
 
-    LOGIC:
-    1. Respect 'isFixed' stops. Do NOT remove them unless impossible to reach (then warn in title).
-    2. Adjust start times and travel durations.
-    3. If running late, drop non-fixed stops.
+    INSTRUCTIONS:
+    1. If the reason is "Swap [Location Name]", replace that specific stop with a relevant alternative that fits the time slot and vibe.
+    2. Keep fixed commitments locked.
+    3. Re-optimize travel times.
     
     Return the full updated JSON structure.
   `;
@@ -185,14 +228,21 @@ export const recalculateItinerary = async (
       config: {
         responseMimeType: "application/json",
         responseSchema: itinerarySchema,
-        thinkingConfig: { thinkingBudget: 0 }, 
+        thinkingConfig: { thinkingBudget: 0 },
+        // NOTE: No googleMaps tool here
       }
     });
 
     const text = response.text;
     if (!text) throw new Error("No response from Gemini");
     
-    return JSON.parse(text) as Itinerary;
+    const updatedItinerary = JSON.parse(text) as Itinerary;
+
+    // Phase 2: Grounding (Resolve Locations for new stops)
+    // We pass the start location address from the first stop as a hint if available
+    const locationHint = currentItinerary.stops[0]?.location?.address || "New York";
+    return await enrichItineraryWithLocations(updatedItinerary, locationHint);
+
   } catch (error) {
     console.error("Gemini Recalc Error:", error);
     throw error;

@@ -1,17 +1,19 @@
 import { UserPreferences } from './types';
 
 export const INITIAL_PREFERENCES: UserPreferences = {
-  vibeScore: 75,
+  vibeScore: 60,
   vibeDescription: '',
   dietary: [],
-  location: '',
+  location: 'New York, NY',
   budget: 'MODERATE',
+  tripStartTime: '09:00',
+  tripEndTime: '22:00',
   fixedCommitments: []
 };
 
 export const MOCK_START_LOCATION = {
-  lat: 35.6892, // Tokyo Station approx
-  lng: 139.7024
+  lat: 40.7580, // Times Square
+  lng: -73.9855
 };
 
 export const DIETARY_OPTIONS = [

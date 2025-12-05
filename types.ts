@@ -4,6 +4,8 @@ export interface UserPreferences {
   dietary: string[];
   location: string;
   budget: 'ECONOMY' | 'MODERATE' | 'LUXURY';
+  tripStartTime: string; // HH:MM when the day starts
+  tripEndTime: string; // HH:MM when the day ends
   fixedCommitments: FixedCommitment[];
 }
 
@@ -38,6 +40,8 @@ export interface Stop {
   isFixed?: boolean; // True if it was a user commitment
   estimatedCost: string; // e.g. "Free", "$20", "¥5000"
   bestPhotoSpot?: string; // Specific suggestion for a photo
+  localTip?: string; // Insider advice e.g. "Sit on the right side"
+  crowdLevel?: 'Low' | 'Moderate' | 'Busy' | 'Crushed'; 
   location: {
     lat: number;
     lng: number;
